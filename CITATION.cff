@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+title: "Machina: a deterministic linguistic search engine for Latin"
+message: "Se usi Machina nella ricerca, cita questo software."
+type: software
+authors:
+  - family-names: "<Cognome>"
+    given-names: "<Nome>"
+    orcid: "https://orcid.org/0000-0000-0000-0000"
+abstract: >-
+  Machina treats a Latin sentence as an optimal trajectory in a finite,
+  rigorously defined state space. Generation is search, not prediction:
+  branch-and-bound best-first over grammatically admissible linguistic
+  transitions, with selectional restrictions grounded in corpus attestation
+  (IT-VaLex) and generalised through WordNet hyponymy. No neural networks,
+  no probabilities, no pseudo-random generators. Bit-identical output for
+  identical initial state.
+keywords: [Latin, computational linguistics, deterministic generation,
+           valency, WordNet, symbolic AI, GOFAI]
+license: CC0-1.0
+repository-code: "https://github.com/<utente>/machina"

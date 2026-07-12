@@ -1,0 +1,5 @@
+data/src/
+data/build/
+data/LICENSE-PROFILE.txt
+__pycache__/
+*.pyc
