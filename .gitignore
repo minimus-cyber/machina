@@ -1,5 +1,7 @@
 data/src/
 data/build/
+data/data_real.json
 data/LICENSE-PROFILE.txt
 __pycache__/
 *.pyc
+venv/
