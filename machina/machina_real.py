@@ -134,6 +134,35 @@ def conjugate(lemma, e, num):
     stem, c = verb_conj(lemma, e)
     return stem + CONJ[c][num]
 
+def infinitive(lemma, e):
+    """L'infinito e' gia' la prima forma del paradigma GF (es. 'amare',
+    'legere'): non va derivato, e' dato."""
+    return e["f"][0]
+
+# ==========================================================================
+# 2bis. Verbi servili/fraseologici — tabella esplicita e dichiarata
+#
+# Il predicato puo' essere composto: modale/fraseologico coniugato + infinito
+# del verbo lessicale (es. "debet amare"). Il motore si rifiuta di indovinare
+# anche qui: solo i lemmi qui dichiarati sono ammessi come testa di un
+# predicato composto, e solo con la coniugazione qui specificata a mano.
+#
+#   'debeo'  — regolare (2a coniug.), ma GF DictLat non ne da' la 1sg:
+#              risulterebbe UNDECIDABLE per la via normale (verb_conj).
+#   ESCLUSI dichiaratamente, non per dimenticanza:
+#   'possum' — assente da GF DictLat (irregolare, composto pot+esse).
+#   'volo'   — collide nei dati GF con 'volare' (1a coniug., "volare"):
+#              stessa insidia lego/lego2 di ADR-001 §2a. Richiede una voce
+#              separata prima di poter essere usato; non si indovina quale
+#              delle due letture sia quella intesa.
+# ==========================================================================
+PHRASAL_STEMS = {"debeo": "deb"}
+PHRASAL_CONJ  = {"debeo": "2"}
+PHRASAL_VERBS = tuple(sorted(PHRASAL_CONJ))
+
+def phrasal_conjugate(lemma: str, num: str) -> str:
+    return PHRASAL_STEMS[lemma] + CONJ[PHRASAL_CONJ[lemma]][num]
+
 # ==========================================================================
 # 3. Base di conoscenza reale
 # ==========================================================================
@@ -150,18 +179,33 @@ def canonical(frame):
 CASEMAP = {"nom": "nom", "acc": "acc", "abl": "abl", "dat": "dat", "gen": "gen"}
 
 # ==========================================================================
-# 4. Costituenti e valutazione (interi puri)
+# 4. Costituenti, predicato e valutazione (interi puri)
 # ==========================================================================
 @dataclass(frozen=True)
 class C:
     rel: str; noun: str; adj: Optional[str]; case: str; num: str
     prep: str; words: Tuple[str, ...]
 
-Item = Union[C, str]   # str = la forma coniugata del verbo
+@dataclass(frozen=True)
+class Pred:
+    """Il predicato: un verbo finito da solo, oppure — se sia il modale sia
+    il verbo lessicale sono fra i semi forniti — la composizione dichiarata
+    in PHRASAL_VERBS. L'ordine interno (modale poi infinito) e' fisso, non
+    fa parte della ricerca sull'ordine: il predicato resta un solo elemento
+    nella sequenza, come nella versione a verbo singolo."""
+    words: Tuple[str, ...]
+    lemmas: Tuple[str, ...]   # ultimo elemento = verbo che governa il frame
+
+Item = Union[C, Pred]
 
 W_SLOT, W_ADJ = 40, 8
 W_VFIN, W_SBOBJ, W_SB1ST = 15, 10, 8
 MAXORD = W_VFIN + W_SBOBJ + W_SB1ST
+
+W_SEED = 25   # bonus per seme distinto incorporato nella frase — dichiarato,
+              # non un effetto collaterale del bias di lunghezza (CLAUDE.md §7):
+              # e' il termine esplicito che fa preferire "piu' semi usati",
+              # non solo "piu' parole"
 
 def build(rel, case, prep, noun, adj, num):
     if noun not in GN: return None
@@ -178,12 +222,16 @@ def build(rel, case, prep, noun, adj, num):
         return None
     return C(rel, noun, adj, case, num, prep, tuple(w))
 
-def score_plan(combo: List[C]) -> int:
-    """Componente indipendente dall'ordine."""
-    return sum(W_SLOT + (W_ADJ if c.adj else 0) for c in combo)
+def score_plan(combo: List[C], pred: Pred, seeds: frozenset) -> int:
+    """Componente indipendente dall'ordine: valenza/accordo (come prima) piu'
+    il bonus esplicito di copertura dei semi (W_SEED, dichiarato sopra)."""
+    base = sum(W_SLOT + (W_ADJ if c.adj else 0) for c in combo)
+    used = set(pred.lemmas) | {c.noun for c in combo} | {c.adj for c in combo if c.adj}
+    return base + W_SEED * len(used & seeds)
 
 def order_score(items: List[Item], vi: int) -> int:
-    """Componente dipendente dall'ordine ('eleganza strutturale', CLAUDE.md §7)."""
+    """Componente dipendente dall'ordine ('eleganza strutturale', CLAUDE.md §7).
+    vi = posizione del predicato (Pred) nella sequenza."""
     s = 0
     n = len(items)
     if vi == n - 1: s += W_VFIN
@@ -204,18 +252,57 @@ class Stats:
     tt_hits: int = 0
 
 # ==========================================================================
-# 6. Enumerazione dei piani (verbo+frame fissati; filler e modificatori variano)
+# 6. Predicati e costituenti candidati a partire dai SEMI (non piu' un solo
+#    verbo): universo chiuso, come nel prototipo originale (SemanticState) —
+#    i filler ammessi sono solo i lemmi forniti dall'utente, non l'intero
+#    corpus.
 # ==========================================================================
-def enumerate_combos(frame, fillers: Dict[str, List[str]], adjs: Tuple[str, ...],
-                      num: str, max_words: int, stats: Stats):
+def build_predicates(seed_verbs: Tuple[str, ...], num: str) -> List[Pred]:
+    """Un Pred per ogni verbo seme risolvibile da solo, piu' un Pred per ogni
+    composizione modale+infinito quando ENTRAMBI i lemmi sono fra i semi
+    (il modale non entra mai di nascosto)."""
+    preds: List[Pred] = []
+    seed_set = set(seed_verbs)
+
+    for v in sorted(seed_set):
+        if v not in D["verbs"]:
+            continue
+        try:
+            vw = conjugate(v, GV[v], num)
+            preds.append(Pred((vw,), (v,)))
+        except (Undecidable, KeyError):
+            pass   # non utilizzabile da solo — puo' comunque comparire come infinito sotto un modale
+
+    for modal in sorted(seed_set & set(PHRASAL_VERBS)):
+        mconj = phrasal_conjugate(modal, num)
+        for v in sorted(seed_set - {modal}):
+            if v not in D["verbs"] or v in PHRASAL_VERBS:
+                continue
+            try:
+                inf = infinitive(v, GV[v])
+            except KeyError:
+                continue
+            preds.append(Pred((mconj, inf), (modal, v)))
+
+    return preds
+
+def enumerate_combos_seeded(frame, fillers: Dict[str, List[str]],
+                             seed_nouns: Tuple[str, ...], seed_adjs: Tuple[str, ...],
+                             num: str, budget: int, stats: Stats):
+    """Come la vecchia enumerate_combos, ma i filler ammessi per ogni slot
+    sono SOLO i nomi/aggettivi forniti come semi (intersecati con
+    l'attestazione IT-VaLex dello slot), non l'intero corpus. `budget` e' il
+    numero di parole disponibili per i costituenti (max_words meno le parole
+    gia' impegnate dal predicato)."""
     slots = [tuple(s) for s in frame]
     per = []
     for rel, case, prep in slots:
         key = "|".join((rel, case, prep))
-        cands = fillers.get(key, [])
+        attested = set(fillers.get(key, []))
+        cands = [n for n in seed_nouns if n in attested]
         opts = []
         for nl in sorted(cands):
-            for al in (None,) + tuple(sorted(adjs)):
+            for al in (None,) + tuple(sorted(a for a in seed_adjs)):
                 c = build(rel, case, prep, nl, al, num)
                 if c:
                     opts.append(c)
@@ -229,8 +316,8 @@ def enumerate_combos(frame, fillers: Dict[str, List[str]], adjs: Tuple[str, ...]
         if len({c.noun for c in combo}) != len(combo):
             stats.pruned_grammar += 1
             continue
-        nw = sum(len(c.words) for c in combo) + 1
-        if nw > max_words:
+        nw = sum(len(c.words) for c in combo)
+        if nw > budget:
             stats.pruned_bound += 1
             continue
         stats.plans += 1
@@ -263,14 +350,15 @@ def _admissible_bound(new_emitted: Tuple[int, ...], items: List[Item], base: int
 
     return b
 
-def search_order(combo: List[C], vw: str, lower_bound: Optional[int],
+def search_order(combo: List[C], pred: Pred, base: int, lower_bound: Optional[int],
                   stats: Stats, tt: Dict[Tuple[int, ...], int]
                   ) -> Optional[Tuple[int, List[Item]]]:
-    """Best-first B&B sull'ordine dei costituenti + verbo. Determinismo per
-    tie-break stabile (counter monotono, mai hash di set)."""
-    items: List[Item] = list(combo) + [vw]
+    """Best-first B&B sull'ordine dei costituenti + predicato. `base' e' gia'
+    calcolato dal chiamante (score_plan, che ora include anche il bonus di
+    copertura dei semi). Determinismo per tie-break stabile (counter
+    monotono, mai hash di set)."""
+    items: List[Item] = list(combo) + [pred]
     n = len(items)
-    base = score_plan(combo)
 
     best: Optional[Tuple[int, List[Item]]] = None
     counter = itertools.count()
@@ -312,44 +400,59 @@ def search_order(combo: List[C], vw: str, lower_bound: Optional[int],
 
 # ==========================================================================
 # 8. Driver: Iterative Deepening con Aspiration Window (CLAUDE.md §3, §9)
+#
+# Input: SEMI su piu' parti del discorso (verbi, nomi, aggettivi), non un
+# solo verbo. Universo di ricerca chiuso ai semi forniti (come nel prototipo
+# originale, SemanticState). Obiettivo: la frase che massimizza il punteggio,
+# che ora include esplicitamente quanti semi distinti sono stati incorporati
+# — non necessariamente tutti (W_SEED, dichiarato in §4).
 # ==========================================================================
-def generate(verb, num="sg", adjs=(), max_words=6):
-    if verb not in D["verbs"]:
-        return None, "verbo assente da ITVALEX∩GF"
-    e = D["verbs"][verb]
-    try:
-        vw = conjugate(verb, GV[verb], num)
-    except (Undecidable, KeyError) as ex:
-        return None, f"UNDECIDABLE: {ex}"
-
-    frames = [f for f in e["frames"] if canonical([tuple(s) for s in f])]
-    if not frames:
-        return None, "nessun frame canonico"
-    frames = sorted(frames)
+def generate(verbs, nouns=(), adjs=(), num="sg", max_words=8):
+    seed_verbs = tuple(verbs) if not isinstance(verbs, str) else (verbs,)
+    seeds = frozenset(seed_verbs) | frozenset(nouns) | frozenset(adjs)
+    if not seeds:
+        return None, "nessun seme fornito"
 
     stats = Stats()
     trace: List[str] = []
-    overall: Optional[Tuple[int, List[Item], List[C], list]] = None
+    overall = None   # (score, seq, combo, frame, pred)
     aspiration: Optional[int] = None
+
+    # frame canonici per ciascun possibile verbo che governa il predicato
+    # (il lessicale, sia da solo sia sotto un modale — vedi build_predicates)
+    frame_cache: Dict[str, list] = {}
+    for v in seed_verbs:
+        if v in D["verbs"]:
+            frame_cache[v] = sorted(f for f in D["verbs"][v]["frames"]
+                                     if canonical([tuple(s) for s in f]))
 
     for d in range(2, max_words + 1):
         tt: Dict[Tuple[int, ...], int] = {}
-        best_this: Optional[Tuple[int, List[Item], List[C], list]] = None
+        best_this = None
 
-        for frame in frames:
-            for combo in enumerate_combos(frame, e["fillers"], adjs, num, d, stats):
-                lb = aspiration if best_this is None else max(
-                    aspiration if aspiration is not None else -(10**9), best_this[0])
-                r = search_order(combo, vw, lb, stats, tt)
-                if r is None:
-                    continue
-                sc, seq = r
-                if best_this is None or sc > best_this[0]:
-                    best_this = (sc, seq, combo, frame)
+        for pred in build_predicates(seed_verbs, num):
+            gov = pred.lemmas[-1]
+            frames = frame_cache.get(gov, [])
+            budget = d - len(pred.words)
+            if budget < 0:
+                continue
+            for frame in frames:
+                fillers = D["verbs"][gov]["fillers"]
+                for combo in enumerate_combos_seeded(frame, fillers, nouns, adjs,
+                                                      num, budget, stats):
+                    base = score_plan(combo, pred, seeds)
+                    lb = aspiration if best_this is None else max(
+                        aspiration if aspiration is not None else -(10**9), best_this[0])
+                    r = search_order(combo, pred, base, lb, stats, tt)
+                    if r is None:
+                        continue
+                    sc, seq = r
+                    if best_this is None or sc > best_this[0]:
+                        best_this = (sc, seq, combo, frame, pred)
 
         if best_this is not None:
-            sc, seq, combo, frame = best_this
-            words = [w for x in seq for w in (x.words if isinstance(x, C) else (x,))]
+            sc, seq, combo, frame, pred = best_this
+            words = [w for x in seq for w in (x.words if isinstance(x, C) else x.words)]
             trace.append(f"depth {d}: score={sc}  «{' '.join(words)}»")
             aspiration = sc
             if overall is None or sc > overall[0]:
@@ -358,13 +461,14 @@ def generate(verb, num="sg", adjs=(), max_words=6):
             trace.append(f"depth {d}: nessuna frase ammissibile")
 
     if overall is None:
-        return None, "nessuna realizzazione"
+        return None, f"nessuna realizzazione (semi: {sorted(seeds)})"
 
-    sc, seq, combo, frame = overall
-    words = [w for x in seq for w in (x.words if isinstance(x, C) else (x,))]
+    sc, seq, combo, frame, pred = overall
+    words = [w for x in seq for w in x.words]
     sentence = " ".join(words)
+    used = (set(pred.lemmas) | {c.noun for c in combo} | {c.adj for c in combo if c.adj}) & seeds
     info = (f"nodi={stats.nodes} piani={stats.plans} "
             f"potati_bound={stats.pruned_bound} potati_gramm={stats.pruned_grammar} "
-            f"tt_hits={stats.tt_hits} frame_canonici={len(frames)} | "
+            f"tt_hits={stats.tt_hits} | semi usati {len(used)}/{len(seeds)}: {sorted(used)} | "
             + " / ".join(trace))
-    return (sc, sentence, combo, frame), info
+    return (sc, sentence, combo, frame, pred), info

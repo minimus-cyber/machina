@@ -10,11 +10,13 @@ PRINCIPIO DI DESIGN:
 
 TEMA:
   Chiaro, monospace (Consolas — coerente con l'estetica "traccia/log" del
-  progetto: la trasparenza si legge meglio in un font da codice che in uno
-  editoriale). Palette dichiarata, non decorativa: verde mimetico come colore
-  dominante, bordeaux per titoli/enfasi, rosa carne/ciano/viola chiaro come
-  accenti minori — usati per distinguere le componenti del punteggio (SEM,
-  TAX, SYN, ORD), non a caso.
+  progetto). Un solo colore d'accento, il bordeaux: niente palette multipla.
+  Le variabili CSS di Gradio vengono sovrascritte direttamente (non solo
+  tramite l'API Theme.set(), che lascia scoperti alcuni sfondi secondari
+  usati dai blocchi di codice/pannelli — con testo forzato scuro sopra uno
+  sfondo rimasto scuro di default, il risultato era illeggibile) e forzate
+  anche sotto `.dark`, cosi' il tema resta chiaro a prescindere dalle
+  preferenze del sistema/browser di chi apre il link.
 """
 import hashlib
 import gradio as gr
@@ -22,74 +24,92 @@ import gradio as gr
 from machina import machina_real as M
 from machina import resources as R
 
-# --- palette dichiarata (ordine di preferenza, non tutte obbligatorie) -----
-VERDE_MIMETICO = "#5C6B47"
-ROSA_CARNE     = "#D9A98A"
-BORDEAUX       = "#6E2A34"
-CIANO          = "#3F9DA8"
-VIOLA_CHIARO   = "#B6A0D6"
-
+BORDEAUX   = "#6E2A34"
+BORDEAUX_H = "#551F27"   # hover, piu' scuro
 INCHIOSTRO = "#1C1C1A"
-CARTA      = "#FAFAF7"
+CARTA      = "#FFFFFF"
+PANNELLO   = "#F7F5F1"   # sfondo secondario (blocchi di codice ecc.), chiaro
 BORDO      = "#DEDACF"
 
 THEME = gr.themes.Base().set(
     body_background_fill=CARTA,
-    body_background_fill_dark=CARTA,
     body_text_color=INCHIOSTRO,
-    body_text_color_dark=INCHIOSTRO,
-    block_background_fill="#FFFFFF",
-    block_background_fill_dark="#FFFFFF",
+    background_fill_primary=CARTA,
+    background_fill_secondary=PANNELLO,
+    block_background_fill=CARTA,
     block_border_color=BORDO,
     block_title_text_color=BORDEAUX,
     block_label_text_color=BORDEAUX,
-    button_primary_background_fill=VERDE_MIMETICO,
-    button_primary_background_fill_hover="#4A5739",
+    border_color_primary=BORDO,
+    button_primary_background_fill=BORDEAUX,
+    button_primary_background_fill_hover=BORDEAUX_H,
     button_primary_text_color="#FFFFFF",
-    button_primary_border_color=VERDE_MIMETICO,
-    input_background_fill="#FFFFFF",
+    button_primary_border_color=BORDEAUX,
+    input_background_fill=CARTA,
     input_border_color=BORDO,
     input_border_color_focus=BORDEAUX,
-    slider_color=VERDE_MIMETICO,
-    link_text_color=CIANO,
-    link_text_color_hover=BORDEAUX,
+    slider_color=BORDEAUX,
+    link_text_color=BORDEAUX,
+    link_text_color_hover=BORDEAUX_H,
 )
 
+# Sovrascrittura diretta delle custom property CSS di Gradio, anche sotto
+# .dark: l'API Python del tema non copre tutte le variabili usate dai
+# componenti (es. gli sfondi dei blocchi ```codice``` in Markdown), quindi
+# si forzano qui i valori effettivi, non solo quelli esposti da Theme.set().
 CSS = f"""
 * {{ font-family: 'Consolas', ui-monospace, SFMono-Regular, monospace !important; }}
+
+:root, .dark, .gradio-container {{
+  --body-background-fill: {CARTA} !important;
+  --background-fill-primary: {CARTA} !important;
+  --background-fill-secondary: {PANNELLO} !important;
+  --block-background-fill: {CARTA} !important;
+  --panel-background-fill: {CARTA} !important;
+  --body-text-color: {INCHIOSTRO} !important;
+  --body-text-color-subdued: #55524c !important;
+  --block-title-text-color: {BORDEAUX} !important;
+  --block-label-text-color: {BORDEAUX} !important;
+  --border-color-primary: {BORDO} !important;
+  --border-color-accent: {BORDEAUX} !important;
+  --button-primary-background-fill: {BORDEAUX} !important;
+  --button-primary-background-fill-hover: {BORDEAUX_H} !important;
+  --button-primary-text-color: #FFFFFF !important;
+  --input-background-fill: {CARTA} !important;
+  --link-text-color: {BORDEAUX} !important;
+  --code-background-fill: {PANNELLO} !important;
+  --table-even-background-fill: {CARTA} !important;
+  --table-odd-background-fill: {PANNELLO} !important;
+}}
 h1 {{ color: {BORDEAUX}; }}
-.machina-tag-sem {{ color: {VERDE_MIMETICO}; font-weight: bold; }}
-.machina-tag-tax {{ color: {CIANO}; font-weight: bold; }}
-.machina-tag-ord {{ color: {ROSA_CARNE}; font-weight: bold; }}
-.machina-tag-fp  {{ color: {VIOLA_CHIARO}; }}
 """
 
 
-def run(verb: str, num: str, adj_str: str, depth: int):
-    adjs = tuple(a.strip() for a in adj_str.split(",") if a.strip())
+def run(verb_list, noun_list, adj_list, num: str, depth: int):
+    verbs = tuple(verb_list or [])
+    nouns = tuple(noun_list or [])
+    adjs = tuple(adj_list or [])
 
-    if verb not in M.D["verbs"]:
-        return "—", f"Il verbo **{verb}** non è in IT-VaLex ∩ GF.", "", ""
+    if not verbs:
+        return "—", "Scegli almeno un verbo: è il seme che ancora il predicato.", "", ""
 
-    # coniugazione: Whitaker se GF non basta
+    res, info = M.generate(verbs=verbs, nouns=nouns, adjs=adjs, num=num, max_words=depth)
+    if not res:
+        return "—", f"Nessuna realizzazione trovata.\n\n`{info}`", "", ""
+
+    score, sent, plan, frame, pred = res
+    gov = pred.lemmas[-1]   # il verbo lessicale che governa il frame
+
     src = "GF DictLat"
     try:
-        M.verb_conj(verb, M.GV[verb])
-    except M.Undecidable:
-        if verb in R.verbs:
-            src = f"Whitaker (conj. {R.verbs[verb]['conj']}) — GF era indecidibile"
-        else:
-            return "—", (f"**{verb}**: coniugazione indecidibile.\n\n"
-                         "Verbo irregolare (composto di *esse* o deponente anomalo): "
-                         "richiede tabella esplicita.\n\n"
-                         "*Il motore si rifiuta di indovinare. Un sistema che "
-                         "indovinasse qui sarebbe deterministico e sbagliato.*"), "", ""
+        M.verb_conj(gov, M.GV[gov])
+    except (M.Undecidable, KeyError):
+        if gov in R.verbs:
+            src = f"Whitaker (conj. {R.verbs[gov]['conj']}) — GF era indecidibile"
 
-    res, info = M.generate(verb, num, adjs=adjs, max_words=depth)
-    if not res:
-        return "—", f"Nessuna realizzazione: {info}", "", ""
-
-    score, sent, plan, frame = res
+    modale = (f" · composto con verbo servile/fraseologico **{pred.lemmas[0]}** "
+              f"(tabella dichiarata, non indovinata — vedi `machina/machina_real.py` §2bis)"
+              if len(pred.lemmas) > 1 else "")
 
     # --- valenza e restrizioni selettive
     val = ["| funtore | caso | prep | filler | attestato | tassonomia (LWN) |",
@@ -103,20 +123,21 @@ def run(verb: str, num: str, adj_str: str, depth: int):
     tree = ["```", "(S"]
     for c in plan:
         tree.append(f"   (NP:{c.rel}.{c.case}  {' '.join(c.words)})")
-    tree += [f"   (V  {sent.split()[-1]})", ")", "```"]
+    tree += [f"   (VP  {' '.join(pred.words)})", ")", "```"]
 
     # --- determinismo: fingerprint riproducibile (include le statistiche di ricerca)
-    fp = hashlib.sha256(f"{verb}|{num}|{sorted(adjs)}|{depth}|{sent}|{score}|{info}".encode()
-                        ).hexdigest()[:16]
+    fp = hashlib.sha256(
+        f"{sorted(verbs)}|{sorted(nouns)}|{sorted(adjs)}|{num}|{depth}|{sent}|{score}|{info}".encode()
+    ).hexdigest()[:16]
 
     trace = (
-        f"**Coniugazione da:** {src}\n\n"
-        f"**Frame valenziale:** `{[tuple(s) for s in frame]}`\n\n"
+        f"**Predicato:** `{' '.join(pred.words)}` — coniugazione da {src}{modale}\n\n"
+        f"**Frame valenziale ({gov}):** `{[tuple(s) for s in frame]}`\n\n"
         f"**Ricerca (best-first + Branch & Bound, TT, Iterative Deepening):** {info}\n\n"
         f"**Punteggio:** {score}  *(interi puri — nessun float: "
         f"la somma in virgola mobile non è associativa e aprirebbe una falla "
-        f"nel determinismo)*\n\n"
-        f"<span class='machina-tag-fp'>**Fingerprint SHA-256:**</span> `{fp}`\n\n"
+        f"nel determinismo; include il bonus dichiarato per semi incorporati)*\n\n"
+        f"**Fingerprint SHA-256:** `{fp}`\n\n"
         f"> Riesegui con gli stessi parametri: il fingerprint sarà identico. "
         f"Sempre — include anche le statistiche di ricerca, non solo la frase. "
         f"È l'unica garanzia che questo non sia un modello linguistico."
@@ -124,24 +145,53 @@ def run(verb: str, num: str, adj_str: str, depth: int):
     return sent, trace, "\n".join(val), "\n".join(tree)
 
 
-VERBS = sorted(v for v in M.D["verbs"] if v in M.GV or v in R.verbs)
+VERBS = sorted((set(M.D["verbs"]) & (set(M.GV) | set(R.verbs))) | set(M.PHRASAL_VERBS))
+NOUNS = sorted({n for v in M.D["verbs"].values() for ns in v["fillers"].values() for n in ns})
+ADJS  = sorted(M.GA)
 
 with gr.Blocks(title="Machina") as demo:
     gr.Markdown(
-        "# Machina\n"
-        "### Un motore deterministico di ricerca linguistica per il latino\n\n"
-        "**La frase non viene predetta. Viene cercata.**\n\n"
-        "Nessuna rete neurale. Nessuna probabilità. Nessun generatore casuale. "
-        "A parità di stato iniziale, l'output è identico bit per bit.\n\n"
-        "*La frase, qui sotto, non è il prodotto. La traccia lo è.*"
+        "# Machina\n\n"
+        "Genera frasi latine grammaticalmente corrette **cercandole** fra le "
+        "possibilità attestate in corpora reali (non prevedendole con un "
+        "modello linguistico), e mostra sempre il percorso completo che ha "
+        "portato a quella frase — non solo il risultato.\n\n"
+        "**Come si usa:**\n"
+        "1. Scegli uno o più **verbi** (il predicato — se ne scegli più di uno "
+        "sono candidati fra cui il motore sceglie; scegli anche un verbo "
+        "servile come **debeo** insieme a un altro verbo per ottenere un "
+        "predicato composto tipo *debet amare*).\n"
+        "2. Scegli uno o più **nomi** e uno o più **aggettivi**: sono i semi "
+        "semantici — il motore userà quelli grammaticalmente compatibili e "
+        "attestati nel corpus, **non necessariamente tutti**.\n"
+        "3. Scegli il **numero** (singolare o plurale).\n"
+        "4. Regola la **profondità** (`go depth N`): il numero massimo di "
+        "parole della frase generata.\n"
+        "5. Premi **generate**.\n\n"
+        "**Cosa vedi nel risultato:** la frase latina; la traccia (predicato "
+        "scelto e da dove viene la sua coniugazione, quale frame valenziale è "
+        "stato usato, quanti semi dei tuoi sono stati effettivamente "
+        "incorporati, quanti nodi la ricerca ha esplorato e potato, il "
+        "punteggio, e un *fingerprint* — riesegui con gli stessi parametri e "
+        "resta identico: è la prova che il risultato non dipende dal caso); "
+        "la tabella di **valenza** (quali ruoli il verbo richiede e con quali "
+        "nomi sono realmente attestati nel corpus); l'**albero sintattico**.\n\n"
+        "Non tutte le combinazioni funzionano: un nome/aggettivo entra in "
+        "frase solo se attestato per quello slot di quel verbo nel corpus "
+        "usato, e solo i verbi con coniugazione ricavabile senza ambiguità "
+        "sono utilizzabili da soli — se compare `UNDECIDABLE`, è voluto: il "
+        "motore preferisce rifiutarsi piuttosto che indovinare una forma."
     )
     with gr.Row():
         with gr.Column(scale=1):
-            verb = gr.Dropdown(VERBS, value="amo" if "amo" in VERBS else VERBS[0],
-                               label="Verbo (stato semantico)")
+            verb = gr.Dropdown(VERBS, value=["amo"] if "amo" in VERBS else VERBS[:1],
+                               multiselect=True, label="Verbi (predicato)")
+            noun = gr.Dropdown(NOUNS, value=[v for v in ["deus", "homo"] if v in NOUNS],
+                               multiselect=True, label="Nomi (semi)")
+            adjs = gr.Dropdown(ADJS, value=[v for v in ["bonus", "magnus"] if v in ADJS],
+                               multiselect=True, label="Aggettivi (semi)")
             num = gr.Radio(["sg", "pl"], value="sg", label="Numero")
-            adjs = gr.Textbox("bonus, magnus", label="Modificatori ammessi")
-            depth = gr.Slider(3, 8, 6, step=1, label="go depth N (parole massime)")
+            depth = gr.Slider(3, 10, 8, step=1, label="go depth N (parole massime)")
             btn = gr.Button("generate", variant="primary")
         with gr.Column(scale=2):
             out = gr.Textbox(label="Frase latina", lines=1)
@@ -150,7 +200,7 @@ with gr.Blocks(title="Machina") as demo:
         vl = gr.Markdown(label="Valenza e restrizioni selettive")
         tv = gr.Markdown(label="Albero sintattico")
 
-    btn.click(run, [verb, num, adjs, depth], [out, tr, vl, tv])
+    btn.click(run, [verb, noun, adjs, num, depth], [out, tr, vl, tv])
 
     gr.Markdown(
         "---\n"
@@ -159,16 +209,21 @@ with gr.Blocks(title="Machina") as demo:
         "pesi sarebbe statistica — vietato. Usare l'*attestazione* come predicato "
         "booleano è una relazione logica — ammesso. Machina legge il corpus "
         "**come un dizionario, non come una distribuzione**.\n"
-        "2. **Iponimia** (Latin WordNet, 13.868 iperonimie): un filler non "
-        "attestato è ammesso se è **iponimo** di uno attestato. L'iponimia è una "
-        "relazione d'ordine, non una misura di distanza.\n\n"
-        "**Limiti dichiarati:** la funzione di valutazione è monotona crescente "
-        "nella lunghezza (il motore tende alla frase più lunga ammissibile, non "
-        "alla migliore) — non si presenta in Divinatio, dove la lunghezza della "
-        "lacuna è nota; i frame di IT-VaLex sono indotti da parse e contengono "
-        "artefatti. Entrambi documentati in `docs/ADR-001.md`.\n\n"
+        "2. **Copertura dei semi**: la ricerca premia esplicitamente quanti dei "
+        "nomi/aggettivi/verbi scelti compaiono nella frase finale — non è un "
+        "requisito tutto-o-niente: alcuni semi possono restare esclusi se non "
+        "grammaticalmente compatibili con nessun frame disponibile.\n\n"
+        "**Limiti dichiarati:** la funzione di valutazione premia anche la "
+        "lunghezza della frase, non solo la copertura dei semi — non si "
+        "presenta in Divinatio, dove la lunghezza della lacuna è nota; i frame "
+        "di IT-VaLex sono indotti da parse e contengono artefatti; i verbi "
+        "servili disponibili sono solo quelli dichiarati esplicitamente in "
+        "`machina/machina_real.py` (**debeo** oggi — **possum**/**volo** sono "
+        "esclusi per collisioni/lacune nei dati, non dimenticati). Documentato "
+        "in `docs/ADR-001.md`.\n\n"
         "Codice **CC0** · dati **non ridistribuiti** (vedi `NOTICE.md`)"
     )
 
 if __name__ == "__main__":
-    demo.launch(theme=THEME, css=CSS)
+    import os
+    demo.launch(theme=THEME, css=CSS, share=os.environ.get("MACHINA_SHARE") == "1")
