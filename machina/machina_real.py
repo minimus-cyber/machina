@@ -472,3 +472,109 @@ def generate(verbs, nouns=(), adjs=(), num="sg", max_words=8):
             f"tt_hits={stats.tt_hits} | semi usati {len(used)}/{len(seeds)}: {sorted(used)} | "
             + " / ".join(trace))
     return (sc, sentence, combo, frame, pred), info
+
+# ==========================================================================
+# 9. DIVINATIO — ricostruzione filologica (ADR-003 §I)
+#
+# Input: due estremi FISSI (prefix_tokens, suffix_tokens) e la lunghezza
+# della lacuna in caratteri (gap_len_chars) — VINCOLO DURO sul bound, non un
+# premio da massimizzare come in §8. Qui il bias di lunghezza si dissolve
+# perche' la lunghezza non e' una variabile: e' un dato (misurabile su
+# pietra/papiro), esattamente come dichiarato in ADR-003.
+#
+# Semplificazioni dichiarate per questa prima versione (non nascoste):
+#   - il confine prefisso/lacuna e lacuna/suffisso deve cadere fra due
+#     costituenti interi (predicato o sintagma), non a meta' di uno di essi;
+#   - nessun aggettivo nella ricostruzione (solo teste nominali dei frame);
+#   - la ricerca e' su TUTTI i filler attestati per lo slot (non su semi
+#     forniti dall'utente: qui si cerca su tutto il corpus, come un filologo).
+# ==========================================================================
+@dataclass
+class DivinatioStats:
+    combos_tried: int = 0
+    orderings_checked: int = 0
+    pruned_length: int = 0
+    valid_found: int = 0
+
+def _all_fillers_combos(frame, fillers: Dict[str, List[str]], num: str):
+    """Come enumerate_combos_seeded, ma senza restrizione a semi: tutti i
+    filler ATTESTATI per lo slot sono candidati."""
+    slots = [tuple(s) for s in frame]
+    per = []
+    for rel, case, prep in slots:
+        key = "|".join((rel, case, prep))
+        opts = []
+        for nl in sorted(fillers.get(key, [])):
+            c = build(rel, case, prep, nl, None, num)
+            if c:
+                opts.append(c)
+        if not opts:
+            return
+        per.append(opts)
+    for combo in itertools.product(*per):
+        if len({c.noun for c in combo}) != len(combo):
+            continue
+        yield list(combo)
+
+def reconstruct(verb: str, prefix_tokens: Tuple[str, ...], suffix_tokens: Tuple[str, ...],
+                 gap_len_chars: int, num: str = "sg"):
+    """Divinatio: saldare due estremi fissi. gap_len_chars e' un vincolo
+    duro — solo le ricostruzioni che lo soddisfano ESATTAMENTE sono ammesse.
+    Ritorna (score, sentence, combo, frame, pred, gap_words), info."""
+    if verb not in D["verbs"]:
+        return None, "verbo assente da ITVALEX∩GF"
+    try:
+        vw = conjugate(verb, GV[verb], num)
+        pred = Pred((vw,), (verb,))
+    except (Undecidable, KeyError) as ex:
+        return None, f"UNDECIDABLE: {ex}"
+
+    frames = sorted(f for f in D["verbs"][verb]["frames"] if canonical([tuple(s) for s in f]))
+    if not frames:
+        return None, "nessun frame canonico"
+
+    prefix_tokens = tuple(prefix_tokens)
+    suffix_tokens = tuple(suffix_tokens)
+    stats = DivinatioStats()
+    best = None   # (score, seq, combo, frame, mid_words)
+
+    for frame in frames:
+        fillers = D["verbs"][verb]["fillers"]
+        for combo in _all_fillers_combos(frame, fillers, num):
+            stats.combos_tried += 1
+            items: List[Item] = list(combo) + [pred]
+            n = len(items)
+
+            for perm in itertools.permutations(range(n)):
+                stats.orderings_checked += 1
+                seq = [items[i] for i in perm]
+                words = [w for it in seq for w in it.words]
+
+                if len(words) < len(prefix_tokens) + len(suffix_tokens):
+                    continue
+                if prefix_tokens and tuple(words[:len(prefix_tokens)]) != prefix_tokens:
+                    continue
+                if suffix_tokens and tuple(words[len(words) - len(suffix_tokens):]) != suffix_tokens:
+                    continue
+
+                mid = words[len(prefix_tokens): len(words) - len(suffix_tokens)] \
+                      if suffix_tokens else words[len(prefix_tokens):]
+                if sum(len(w) for w in mid) != gap_len_chars:
+                    stats.pruned_length += 1
+                    continue
+
+                stats.valid_found += 1
+                vi = next(i for i, x in enumerate(seq) if not isinstance(x, C))
+                sc = score_plan(combo, pred, frozenset()) + order_score(seq, vi)
+                if best is None or sc > best[0]:
+                    best = (sc, seq, combo, frame, mid)
+
+    info_base = (f"combinazioni={stats.combos_tried} ordini_controllati={stats.orderings_checked} "
+                 f"scartati_per_lunghezza={stats.pruned_length} ricostruzioni_valide={stats.valid_found}")
+
+    if best is None:
+        return None, f"nessuna ricostruzione soddisfa prefisso/suffisso/lunghezza esatta | {info_base}"
+
+    sc, seq, combo, frame, mid = best
+    sentence = " ".join(w for it in seq for w in it.words)
+    return (sc, sentence, combo, frame, pred, tuple(mid)), info_base

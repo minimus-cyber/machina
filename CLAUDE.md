@@ -34,11 +34,19 @@ Non sono tre applicazioni: sono la **partizione completa** dello spazio dei
 problemi che un motore di ricerca linguistica può affrontare, ordinati secondo
 un'unica variabile — **quanti nodi sono fissati in anticipo**.
 
-| modo | nodi ancorati | agenti | algoritmo | funzione obiettivo |
-|---|---|---|---|---|
-| **Divinatio** | due (prefisso, suffisso) | 1 | branch & bound best-first | ben definita |
-| **Expositio** | uno (tema-radice) | 1 | branch & bound best-first | definibile, manca uno strato |
-| **Disputatio** | zero | 2, avversariali | Alpha-Beta | distanza dalla contraddizione |
+| modo | nodi ancorati | agenti | algoritmo | funzione obiettivo | stato |
+|---|---|---|---|---|---|
+| **Divinatio** | due (prefisso, suffisso) | 1 | branch & bound | ben definita | **v1 implementata** (`machina_real.reconstruct`) |
+| **Expositio** | uno (tema-radice) | 1 | branch & bound best-first | definibile, manca uno strato | non implementata |
+| **Disputatio** | zero | 2, avversariali | Alpha-Beta | distanza dalla contraddizione | non implementata |
+
+**Divinatio v1 — risultato del benchmark dichiarato in ADR-003 §I:** su 86 casi
+(frase attestata cancellata artificialmente, verificata su verbi con frame
+Sb.nom+Obj.acc), Machina trova una ricostruzione grammaticalmente valida nel
+**98.8%** dei casi e recupera la lezione esatta nel **76.7%**. Limiti dichiarati
+di questa v1: il confine prefisso/lacuna e lacuna/suffisso deve cadere fra due
+costituenti interi (non a metà di uno), e non sono ammessi aggettivi nella
+ricostruzione — entrambe semplificazioni dichiarate, da estendere.
 
 *Ricostruire, esporre e disputare sono lo stesso problema con condizioni al
 contorno diverse.* È questa la tesi architetturale — non un dettaglio
